@@ -1,0 +1,830 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Vocal → Sheet (Stems + Direct PDF) — iOS Fix</title>
+<style>
+  :root { --bg:#0d0f14; --fg:#e7ecf3; --muted:#98a2b3; --accent:#7aa2ff; --warn:#ffb020; }
+  body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:var(--bg); color:var(--fg); }
+  header { padding:16px 20px; border-bottom:1px solid #1c2230; display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+  header h1 { font-size:18px; margin:0; }
+  main { padding:16px; display:grid; gap:16px; max-width:1100px; margin:auto; }
+  .card { background:#121623; border:1px solid #1c2230; border-radius:12px; padding:16px; }
+  .row { display:flex; gap:12px; flex-wrap:wrap; align-items:center; }
+  .row > * { flex: none; }
+  label { font-size:13px; color:var(--muted); display:block; margin-bottom:6px; }
+  input[type="file"] { color:var(--fg); }
+  button { background:#1b2336; color:var(--fg); border:1px solid #2a3551; padding:10px 14px; border-radius:10px; cursor:pointer; }
+  button:disabled { opacity:0.5; cursor:not-allowed; }
+  button.primary { background:var(--accent); color:#071225; border:none; }
+  .grid { display:grid; gap:12px; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); }
+  .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+  .small { font-size:12px; color:var(--muted); }
+  .pill { padding:2px 8px; background:#172035; border:1px solid #2a3551; border-radius:999px; font-size:12px; color:var(--muted); }
+  .status { font-size:13px; }
+  .divider { height:1px; background:#1c2230; margin:12px 0; }
+  h3 { margin:0 0 8px 0; }
+  code { background:#0e1424; padding:2px 6px; border:1px solid #2a3551; border-radius:6px; }
+  #vfPreview { background:#0e1424; border:1px dashed #2a3551; border-radius:10px; padding:10px; overflow:auto; max-height:65vh; }
+  .btnrow { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  .warn { background:#2a1f12; border:1px solid #5a3a14; color:#ffd58a; padding:10px 12px; border-radius:10px; }
+  .dropzone { border:2px dashed #2a3551; border-radius:10px; padding:14px; text-align:center; color:#98a2b3; }
+  .dropzone.drag { border-color:#7aa2ff; color:#e7ecf3; }
+</style>
+</head>
+<body>
+  <header>
+    <h1>Vocal → Sheet (Browser App + Local Stems + PDF)</h1>
+    <span class="pill">client-side analysis</span>
+    <span class="pill">CREPE (f0)</span>
+    <span class="pill">MusicXML & PDF</span>
+  </header>
+
+  <main>
+    <!-- iOS mic warning banner -->
+    <section id="iosBanner" class="warn card" style="display:none;">
+      <b>Heads up (iPhone):</b> Microphone recording is disabled because this page isn’t on <b>https</b> or <b>localhost</b>.
+      To enable the Record button, either:
+      <ul>
+        <li>Host this file <b>on the iPhone</b> (e.g., with the a-Shell app at <code>http://127.0.0.1:8000</code>), or</li>
+        <li>Serve it over <b>HTTPS</b> (e.g., GitHub Pages / ngrok / Cloudflare Tunnel).</li>
+      </ul>
+      Local stem separation still works if your phone can reach your computer’s stem server.
+    </section>
+
+    <!-- INPUT -->
+    <section class="card">
+      <div class="grid">
+        <div>
+          <label>Upload audio (WAV/MP3) or record</label>
+
+          <div class="row">
+            <!-- Broader accept list + a second "all files" picker -->
+            <input id="fileInput" type="file" accept=".wav,audio/wav,audio/*" />
+            <button id="allFilesBtn" title="Pick from all files (if your .wav is hidden)">Pick from all files</button>
+            <input id="fileInputAll" type="file" accept="*/*" style="display:none;" />
+          </div>
+
+          <!-- Drag & drop fallback (also works on iOS 15+) -->
+          <div id="dropzone" class="dropzone" style="margin-top:8px;">
+            Drag & drop your audio here (WAV/MP3/AAC), or use the pickers above.
+          </div>
+
+          <div class="row" style="margin-top:8px;">
+            <button id="recordBtn" title="Requires HTTPS or localhost">● Record</button>
+            <audio id="player" controls></audio>
+          </div>
+          <div class="small" style="margin-top:6px;">
+            If your .wav isn’t visible: tap the picker → <b>Browse</b> (bottom-right) → navigate to <b>On My iPhone</b> → a public folder like <b>Downloads</b> or <b>iCloud Drive</b>. Some app sandboxes hide files from the picker.
+          </div>
+        </div>
+
+        <div>
+          <label>Pre-process</label>
+          <div class="grid">
+            <div><label class="small">Center Boost (beta)</label><select id="centerBoost">
+              <option value="off">Off</option>
+              <option value="mild">Mild</option>
+              <option value="strong">Strong</option>
+            </select></div>
+            <div><label class="small">HPF cutoff (Hz)</label><input id="hpfHz" type="number" min="0" max="500" value="80"></div>
+            <div><label class="small">LPF cutoff (Hz)</label><input id="lpfHz" type="number" min="1000" max="10000" value="6000"></div>
+          </div>
+        </div>
+
+        <div>
+          <label>Quantization & musical settings</label>
+          <div class="grid">
+            <div><label class="small">Grid</label>
+              <select id="gridDen">
+                <option value="8">1/8</option>
+                <option value="12">1/12 (triplet 8ths)</option>
+                <option value="16" selected>1/16</option>
+                <option value="24">1/24 (triplet 16ths)</option>
+                <option value="32">1/32</option>
+              </select></div>
+            <div><label class="small">Min note (ms)</label><input id="minDurMs" type="number" value="120"></div>
+            <div><label class="small">Gap→rest (ms)</label><input id="gapMs" type="number" value="120"></div>
+            <div><label class="small">Snap vibrato (semi)</label><input id="vibratoSemi" type="number" value="0.35" step="0.05"></div>
+          </div>
+          <div class="grid" style="margin-top:8px;">
+            <div><label class="small">Key (auto = detect)</label><input id="forceKey" type="text" placeholder="auto, or e.g. G major"></div>
+            <div><label class="small">Meter</label>
+              <select id="meterSel">
+                <option value="auto">Auto (pop 4/4 bias)</option>
+                <option value="4/4" selected>4/4</option>
+                <option value="3/4">3/4</option>
+                <option value="6/8">6/8</option>
+              </select></div>
+            <div><label class="small">Tempo (BPM; blank=auto)</label><input id="tempoBpm" type="number" min="40" max="240" step="1" placeholder="auto"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <!-- STEM SERVER CONTROLS -->
+      <div class="grid">
+        <div>
+          <label>Local Stem Helper (Demucs)</label>
+          <div class="grid">
+            <div>
+              <label class="small">Server URL</label>
+              <input id="stemUrl" type="text" value="http://localhost:8765" />
+            </div>
+            <div>
+              <label class="small">Action</label>
+              <button id="separateBtn">Separate Vocals (Local)</button>
+            </div>
+          </div>
+          <div class="small" style="margin-top:6px;">
+            Run <code>stem_helper.py</code> on your PC. On mobile, set to <code>http://&lt;PC_LAN_IP&gt;:8765</code>.
+          </div>
+        </div>
+      </div>
+
+      <div class="divider"></div>
+      <div class="row">
+        <button id="analyzeBtn" class="primary">Analyze → Notes</button>
+        <div id="status" class="status">Idle.</div>
+      </div>
+    </section>
+
+    <!-- EXPORT -->
+    <section class="card">
+      <div class="row" style="justify-content:space-between;">
+        <div>
+          <h3>Export</h3>
+          <div class="small">Download MusicXML (MuseScore) or export a PDF directly from your browser.</div>
+        </div>
+        <div class="btnrow">
+          <button id="engraveBtn">Engrave (Preview)</button>
+          <button id="downloadPdf" disabled>Download PDF (direct)</button>
+          <button id="downloadXml" disabled>Download MusicXML</button>
+        </div>
+      </div>
+      <div id="summary" class="small" style="margin-top:8px;"></div>
+      <div id="vfPreview" style="margin-top:10px;"></div>
+    </section>
+
+    <!-- OPTIONAL GPT ASSIST -->
+    <section class="card">
+      <details>
+        <summary>Optional: GPT assist for musical clean-up (key/meter/quant/ties)</summary>
+        <div class="grid" style="margin-top:12px;">
+          <div><label>OpenAI API key (stored in memory only)</label><input id="openaiKey" type="text" placeholder="sk-..." /></div>
+          <div><label>Model</label>
+            <select id="openaiModel">
+              <option value="gpt-4o-mini">gpt-4o-mini</option>
+              <option value="gpt-4.1-mini">gpt-4.1-mini</option>
+              <option value="gpt-4o">gpt-4o</option>
+            </select>
+          </div>
+        </div>
+        <div class="row" style="margin-top:8px;">
+          <button id="planBtn">Propose engraving plan</button>
+          <div id="planOut" class="small mono"></div>
+        </div>
+      </details>
+    </section>
+
+    <!-- LOG -->
+    <section class="card">
+      <h3>Diagnostics</h3>
+      <pre id="log" class="mono small"></pre>
+    </section>
+  </main>
+
+  <!-- Deps -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.20.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/ml5@0.12.2/dist/ml5.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/vexflow@3.0.9/build/vexflow-min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/svg2pdf.js@2.2.1/dist/svg2pdf.min.js"></script>
+
+<script>
+/* ===== iOS environment checks ===== */
+const isIOS = /iP(hone|ad|od)/.test(navigator.platform) || (navigator.userAgent.includes('Mac') && 'ontouchend' in document);
+const isSecure = window.isSecureContext || location.protocol === 'https:';
+const isLocalhost = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+const iosBanner = document.getElementById('iosBanner');
+const recordBtn = document.getElementById('recordBtn');
+
+if (isIOS && !(isSecure || isLocalhost)) {
+  iosBanner.style.display = '';
+  recordBtn.disabled = true;
+  recordBtn.title = 'iOS blocks mic on HTTP. Use HTTPS or localhost.';
+}
+
+/* ===== Utilities ===== */
+const logEl = document.getElementById('log');
+function logln(...args){ logEl.textContent += args.join(' ') + '\\n'; logEl.scrollTop = logEl.scrollHeight; }
+function hzToMidi(hz){ return 69 + 12*Math.log2(hz/440); }
+function clamp(v,a,b){ return Math.max(a, Math.min(b,v)); }
+function median(arr){ const s=[...arr].sort((a,b)=>a-b); const n=s.length; return n? (n%2? s[(n-1)/2] : 0.5*(s[n/2-1]+s[n/2])) : 0; }
+function download(filename, text, mime='application/xml'){
+  const blob = new Blob([text], {type:mime});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href=url; a.download=filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+/* ===== File picking + DnD ===== */
+const fileInput = document.getElementById('fileInput');
+const fileInputAll = document.getElementById('fileInputAll');
+const allFilesBtn = document.getElementById('allFilesBtn');
+const dropzone = document.getElementById('dropzone');
+const player = document.getElementById('player');
+let recordedBlob = null;
+let currentFileBlob = null;
+
+function useBlob(b, label='blob'){
+  currentFileBlob = b;
+  player.src = URL.createObjectURL(b); player.load();
+  logln('Loaded:', label, (b.size/1024/1024).toFixed(2), 'MB');
+}
+
+fileInput.addEventListener('change', (e)=>{
+  const f = e.target.files[0];
+  if(!f) return;
+  useBlob(f, f.name);
+});
+allFilesBtn.addEventListener('click', ()=> fileInputAll.click());
+fileInputAll.addEventListener('change', (e)=>{
+  const f = e.target.files[0];
+  if(!f) return;
+  useBlob(f, f.name);
+});
+
+;['dragenter','dragover'].forEach(ev=> dropzone.addEventListener(ev, e=>{ e.preventDefault(); dropzone.classList.add('drag'); }));
+;['dragleave','drop'].forEach(ev=> dropzone.addEventListener(ev, e=>{ e.preventDefault(); dropzone.classList.remove('drag'); }));
+dropzone.addEventListener('drop', e=>{
+  const f = e.dataTransfer.files && e.dataTransfer.files[0];
+  if(f) useBlob(f, f.name);
+});
+
+/* ===== Recording (with robust errors) ===== */
+recordBtn.addEventListener('click', async ()=>{
+  if (recordBtn.disabled) return;
+  try{
+    if(!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia)){
+      throw new Error('getUserMedia not supported in this browser.');
+    }
+    const stream = await navigator.mediaDevices.getUserMedia({audio:true});
+    const mr = new MediaRecorder(stream);
+    const chunks=[];
+    mr.ondataavailable = e => e.data && chunks.push(e.data);
+    mr.onstop = ()=>{
+      recordedBlob = new Blob(chunks, {type:'audio/webm'});
+      useBlob(recordedBlob, 'recorded.webm');
+      recordBtn.textContent='● Record';
+      stream.getTracks().forEach(t=>t.stop());
+    };
+    mr.start();
+    recordBtn.textContent='■ Stop';
+    recordBtn.onclick = ()=> mr.stop();
+  }catch(e){
+    const name = e && (e.name || e.constructor?.name);
+    if(name === 'NotAllowedError' || name === 'SecurityError'){
+      alert('Microphone permission denied/blocked. On iOS, the page must be HTTPS or localhost.');
+    }else if(name === 'NotFoundError'){
+      alert('No microphone found.');
+    }else{
+      alert('Recording failed: ' + (e.message || e));
+    }
+    logln('REC ERROR:', name, e.message||e);
+  }
+});
+
+/* ===== Preprocess, f0, segmentation, engraver, PDF – identical logic to previous build ===== */
+/* (For brevity, the rest of the code matches the version I sent you, except for minor logs) */
+
+const centerBoost = document.getElementById('centerBoost');
+const hpfHz = document.getElementById('hpfHz');
+const lpfHz = document.getElementById('lpfHz');
+const gridDen = document.getElementById('gridDen');
+const minDurMs = document.getElementById('minDurMs');
+const gapMs = document.getElementById('gapMs');
+const vibratoSemi = document.getElementById('vibratoSemi');
+const forceKey = document.getElementById('forceKey');
+const meterSel = document.getElementById('meterSel');
+const tempoBpm = document.getElementById('tempoBpm');
+const planBtn = document.getElementById('planBtn');
+const planOut = document.getElementById('planOut');
+const dlXml = document.getElementById('downloadXml');
+const dlPdf = document.getElementById('downloadPdf');
+const summary = document.getElementById('summary');
+const engraveBtn = document.getElementById('engraveBtn');
+
+const stemUrl = document.getElementById('stemUrl');
+const separateBtn = document.getElementById('separateBtn');
+
+let lastNotes = []; let lastPlan = null; let lastXml = '';
+let separatedBlob = null;
+
+/* === Audio pipeline helpers (same as before, trimmed comments) === */
+async function preprocessAudioToBuffer(blobOrFile, centerMode='off', hpf=80, lpf=6000){
+  const ac = new (window.OfflineAudioContext || window.webkitOfflineAudioContext)(2, 44100*60, 44100);
+  const data = await blobOrFile.arrayBuffer();
+  const buf = await ac.decodeAudioData(data);
+  const src = ac.createBufferSource(); src.buffer = buf;
+
+  const splitter = ac.createChannelSplitter(2);
+  const chL = ac.createGain(), chR = ac.createGain();
+  const merger = ac.createChannelMerger(2);
+  src.connect(splitter);
+  splitter.connect(chL,0); splitter.connect(chR,1);
+
+  const midGain = ac.createGain(); const sideGain = ac.createGain();
+  const inv = ac.createGain(); inv.gain.value = -1;
+  const midBus = ac.createGain(), sideBus = ac.createGain();
+  chL.connect(midBus); chR.connect(midBus);
+  chL.connect(sideBus); chR.connect(inv); inv.connect(sideBus);
+
+  midGain.gain.value = 0.5;
+  sideGain.gain.value = (centerMode==='strong')? 0.1 : (centerMode==='mild'? 0.4 : 1.0);
+  midBus.connect(midGain); sideBus.connect(sideGain);
+
+  const mix = ac.createGain();
+  midGain.connect(mix); sideGain.connect(mix);
+
+  const hpfNode = ac.createBiquadFilter(); hpfNode.type='highpass'; hpfNode.frequency.value = hpf||0;
+  const lpfNode = ac.createBiquadFilter(); lpfNode.type='lowpass'; lpfNode.frequency.value = lpf||8000;
+
+  mix.connect(hpfNode); hpfNode.connect(lpfNode);
+  lpfNode.connect(merger,0,0); lpfNode.connect(merger,0,1);
+  merger.connect(ac.destination);
+
+  src.start();
+  const out = await ac.startRendering();
+  return out;
+}
+
+async function estimateF0TrackFromBuffer(audioBuffer){
+  return new Promise(async (resolve, reject)=>{
+    try{
+      const ac = new (window.AudioContext || window.webkitAudioContext)();
+      const src = ac.createBufferSource(); src.buffer = audioBuffer;
+      const dst = ac.createMediaStreamDestination();
+      src.connect(dst); src.start();
+
+      const pitch = await ml5.pitchDetection('https://cdn.jsdelivr.net/npm/ml5@0.12.2/models/crepe/', ac, dst.stream, ac.sampleRate);
+      const duration = audioBuffer.duration, hop = 0.02; const f0 = []; let t=0;
+
+      const timer = setInterval(()=>{
+        pitch.getPitch((err, frequency)=>{
+          if(err){ logln('pitch err', err); }
+          f0.push({t, hz: frequency||0});
+        });
+        t += hop;
+        if(t >= duration){
+          clearInterval(timer);
+          try{ src.stop(); ac.close(); }catch{}
+          resolve(f0);
+        }
+      }, hop*1000);
+
+    }catch(e){ reject(e); }
+  });
+}
+
+function segmentNotesFromF0(f0, params){
+  const { gridDen, minDurMs, gapMs, vibratoSemi } = params;
+  if(!f0 || f0.length===0) return [];
+  const hop = 0.02;
+  const minFrames = Math.max(1, Math.round((minDurMs/1000)/hop));
+  const gapFrames = Math.max(1, Math.round((gapMs/1000)/hop));
+
+  const midiSeries = f0.map(d => d.hz>0 ? (69 + 12*Math.log2(d.hz/440)) : 0);
+  const smoothed = midiSeries.map((m,i,arr)=>{
+    if(m===0) return 0;
+    const neigh = arr.slice(Math.max(0,i-2), Math.min(arr.length,i+3)).filter(x=>x>0);
+    const med = median(neigh);
+    return (Math.abs(m-med) < vibratoSemi)? med : m;
+  });
+
+  const notes = [];
+  let i=0;
+  while(i < smoothed.length){
+    if(smoothed[i]===0){ i++; continue; }
+    const base = Math.round(smoothed[i]);
+    let j=i+1, gaps=0;
+    while(j < smoothed.length){
+      const m = smoothed[j];
+      if(m===0){ gaps++; if(gaps>gapFrames) break; }
+      else {
+        const r = Math.round(m);
+        if(Math.abs(r-base) <= 0.5) { /* continue */ } else { break; }
+      }
+      j++;
+    }
+    const len = j - i;
+    if(len >= minFrames){
+      notes.push({ midi: base, startSec: i*hop, durSec: len*hop });
+    }
+    i = j+1;
+  }
+  return notes;
+}
+
+function estimateTempoBpm(notes){
+  if(notes.length<4) return 110;
+  const iois = [];
+  for(let i=1;i<notes.length;i++){ iois.push(notes[i].startSec - notes[i-1].startSec); }
+  const med = median(iois);
+  if(!isFinite(med) || med<=0) return 110;
+  let bpm = 60/med;
+  const candidates = [bpm/2, bpm, bpm*2, bpm*3/2].map(x=> clamp(x,40,200));
+  candidates.sort((a,b)=> Math.abs(a-110)-Math.abs(b-110));
+  return Math.round(candidates[0]);
+}
+function detectKey(notes){
+  if(notes.length===0) return 'C major';
+  const pc = new Array(12).fill(0);
+  for(const n of notes){ pc[n.midi%12] += n.durSec; }
+  const names=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  const majorBase=[2,0,2,0,2,2,0,2,0,2,0,2];
+  let best='C major', bestScore=-1;
+  for(let tonic=0; tonic<12; tonic++){
+    const profile = majorBase.map((v,i)=> majorBase[(i - tonic + 12)%12]);
+    const score = pc.reduce((s,v,i)=> s + v*profile[i], 0);
+    if(score>bestScore){ bestScore=score; best = names[tonic] + ' major'; }
+  }
+  return best;
+}
+
+/* MusicXML build (same as before) */
+function buildMusicXML(notes, plan){
+  const { meter, tempoBpm, keySignature, gridDen } = plan;
+  const qps = tempoBpm/60;
+  const quant = q => Math.max(1/gridDen, Math.round(q*gridDen)/gridDen);
+  let [num,den] = meter.split('/').map(Number);
+  if(!num||!den){ num=4; den=4; }
+  const keyMap = {'C':0,'G':1,'D':2,'A':3,'E':4,'B':5,'F#':6,'C#':7,'F':-1,'Bb':-2,'Eb':-3,'Ab':-4,'Db':-5,'Gb':-6,'Cb':-7};
+  const ks = (keySignature||'C major').split(' ');
+  const tonic = ks[0]||'C', mode = (ks[1]||'major').toLowerCase();
+  const fifths = keyMap[tonic] ?? 0;
+
+  const measureQL = num * (4/den);
+  let qTime = 0; const xmlEvents=[];
+  for(const n of notes){
+    const startQ = n.startSec * qps;
+    const durQ = quant(n.durSec * qps);
+    if(startQ > qTime + 1e-3){
+      const restQ = startQ - qTime;
+      xmlEvents.push(...emitDurationAsTiedRest(restQ, measureQL));
+      qTime = startQ;
+    }
+    xmlEvents.push(...emitDurationAsTiedNote(n.midi, durQ, measureQL));
+    qTime += durQ;
+  }
+
+  const header = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 4.0 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">
+<score-partwise version="4.0">
+ <part-list><score-part id="P1"><part-name>Vocal</part-name></score-part></part-list>
+ <part id="P1">`;
+  const meases = wrapIntoMeasures(xmlEvents, measureQL, {num, den, fifths, mode, tempoBpm});
+  const footer = `</part></score-partwise>`;
+  return header + meases + footer;
+}
+function wrapIntoMeasures(xmlNotes, measureQL, meta){
+  let out='', curQL=0, m=1;
+  function open(m){
+    return `\n  <measure number="${m}">
+    <attributes>
+      <divisions>480</divisions>
+      <key><fifths>${meta.fifths}</fifths><mode>${meta.mode}</mode></key>
+      <time><beats>${meta.num}</beats><beat-type>${meta.den}</beat-type></time>
+      <clef><sign>G</sign><line>2</line></clef>
+    </attributes>
+    <direction placement="above">
+      <direction-type><metronome><beat-unit>quarter</beat-unit><per-minute>${meta.tempoBpm}</per-minute></metronome></direction-type>
+    </direction>`;
+  }
+  out += open(m);
+  for(const x of xmlNotes){
+    if(x.type==='barline'){
+      out += `\n  </measure>`;
+      m++; out += open(m);
+      curQL = 0;
+    } else {
+      out += x.xml;
+      curQL += x.ql;
+      if(Math.abs(curQL - measureQL) < 1e-3){
+        out += `\n  <barline location="right"><bar-style>regular</bar-style></barline>`;
+        out += `\n  </measure>`;
+        m++; out += open(m);
+        curQL = 0;
+      }
+    }
+  }
+  out += `\n  </measure>\n`;
+  return out;
+}
+function qToDiv(q){ return Math.round(q * 480); }
+function pitchXml(midi){
+  const steps=['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+  const step = steps[midi%12]; const alter = step.includes('#')?1:0;
+  const base = step.replace('#','');
+  const octave = Math.floor(midi/12)-1;
+  return {step:base, alter, octave};
+}
+function durToType(div){
+  const table = [
+    [1920,'whole'],[960,'half'],[480,'quarter'],
+    [240,'eighth'],[120,'16th'],[60,'32nd']
+  ];
+  for(const [d,t] of table){ if(div>=d-5) return {type:t, dots: (Math.abs(div - d*1.5)<5)?1:0}; }
+  return {type:'16th', dots:0};
+}
+function emitDurationAsTiedNote(midi, ql, measureQL){
+  const parts=[]; let rem=ql;
+  while(rem>0){
+    const take = Math.min(rem, measureQL);
+    const div = qToDiv(take);
+    const {type, dots} = durToType(div);
+    const p = pitchXml(midi);
+    let xml = `\n  <note><pitch><step>${p.step}</step>${p.alter?`<alter>${p.alter}</alter>`:''}<octave>${p.octave}</octave></pitch><duration>${div}</duration><type>${type}</type>`;
+    if(dots) xml += `<dot/>`;
+    if(rem !== ql) xml += `<tie type="stop"/>`;
+    if(rem - take > 1e-6) xml += `<tie type="start"/>`;
+    xml += `</note>`;
+    parts.push({xml, ql: take});
+    rem -= take;
+    if(rem>1e-6) parts.push({type:'barline'});
+  }
+  return parts;
+}
+function emitDurationAsTiedRest(ql, measureQL){
+  const parts=[]; let rem=ql;
+  while(rem>0){
+    const take = Math.min(rem, measureQL);
+    const div = qToDiv(take);
+    const {type, dots} = durToType(div);
+    let xml = `\n  <note><rest/><duration>${div}</duration><type>${type}</type>`;
+    if(dots) xml += `<dot/>`;
+    xml += `</note>`;
+    parts.push({xml, ql: take});
+    rem -= take;
+    if(rem>1e-6) parts.push({type:'barline'});
+  }
+  return parts;
+}
+
+/* ===== Stem server ===== */
+separateBtn.addEventListener('click', async ()=>{
+  try{
+    statusEl.textContent = 'Separating vocals via local server…';
+    const srcBlob = separatedBlob || currentFileBlob || recordedBlob;
+    if(!srcBlob){ alert('Upload/drag a file or record first.'); return; }
+
+    const base = stemUrl.value.replace(/\/+$/,'');
+    // quick health check
+    const ping = await fetch(base + '/healthz').then(r=>r.json()).catch(()=>null);
+    if(!ping || !ping.ok){ throw new Error('Stem server unreachable. Check URL and that stem_helper.py is running.'); }
+
+    const fd = new FormData();
+    const name = (srcBlob.name || 'input.webm').replace(/[^a-z0-9_.-]/ig,'_');
+    fd.append('audio', srcBlob, name);
+    const res = await fetch(base + '/separate', { method:'POST', body: fd });
+    if(!res.ok){ throw new Error('Stem server error: HTTP ' + res.status); }
+    const blob = await res.blob(); // audio/wav
+    separatedBlob = blob;
+
+    useBlob(separatedBlob, 'vocals.wav');
+    statusEl.textContent = 'Vocal stem ready. Click “Analyze → Notes”.';
+  }catch(e){
+    console.error(e); logln('STEM ERROR:', e.message||e);
+    statusEl.textContent = 'Stem separation error (see Diagnostics).';
+    alert('Stem separation failed: ' + (e.message||e));
+  }
+});
+
+/* ===== Analyze → Notes ===== */
+const analyzeBtn = document.getElementById('analyzeBtn');
+const statusEl = document.getElementById('status');
+const vfPreview = document.getElementById('vfPreview');
+
+analyzeBtn.addEventListener('click', async ()=>{
+  try{
+    statusEl.textContent = 'Preprocessing…';
+    logln('=== Analyze start ===');
+    const f = separatedBlob || currentFileBlob || recordedBlob;
+    if(!f){ alert('Upload/drag a file or record first.'); return; }
+
+    const pre = await preprocessAudioToBuffer(f, centerBoost.value, parseFloat(hpfHz.value), parseFloat(lpfHz.value));
+    statusEl.textContent = 'Estimating f0 (CREPE)… (runs in-browser)';
+    logln('Audio duration', pre.duration.toFixed(2),'s');
+
+    const f0 = await estimateF0TrackFromBuffer(pre);
+    logln('f0 frames:', f0.length);
+
+    const params = {
+      gridDen: parseInt(gridDen.value,10),
+      minDurMs: parseInt(minDurMs.value,10),
+      gapMs: parseInt(gapMs.value,10),
+      vibratoSemi: parseFloat(vibratoSemi.value)
+    };
+    const notes = segmentNotesFromF0(f0, params);
+    if(notes.length===0){ throw new Error('No notes detected. Try separation, stronger center boost, adjust HPF/LPF, or a cleaner clip.'); }
+
+    const tempo = tempoBpm.value ? parseFloat(tempoBpm.value) : estimateTempoBpm(notes);
+    const keyStr = forceKey.value.trim().toLowerCase()==='auto' || forceKey.value.trim()==='' ? detectKey(notes) : forceKey.value.trim();
+    const meter = meterSel.value==='auto' ? '4/4' : meterSel.value;
+
+    lastNotes = notes;
+    lastPlan = { meter, tempoBpm: tempo, keySignature: keyStr, gridDen: params.gridDen };
+
+    statusEl.textContent = `Quantizing & building MusicXML…`;
+    const xml = buildMusicXML(notes, lastPlan);
+    lastXml = xml;
+
+    dlXml.disabled = false;
+    statusEl.textContent = `Done. Click “Engrave (Preview)” to see the score.`;
+    summary.innerHTML = `
+      <div>Notes: <b>${notes.length}</b> &nbsp; | &nbsp; Tempo: <b>${tempo} BPM</b> &nbsp; | &nbsp; Meter: <b>${lastPlan.meter}</b> &nbsp; | &nbsp; Key: <b>${lastPlan.keySignature}</b></div>
+      <div class="small">Use MusicXML with MuseScore, or engrave & export PDF directly below.</div>
+    `;
+  }catch(e){
+    console.error(e); logln('ERROR:', e.message||e);
+    statusEl.textContent = 'Error (see Diagnostics).';
+    alert('Analyze failed: ' + (e.message||e));
+  }
+});
+
+/* ===== MusicXML download ===== */
+dlXml.addEventListener('click', ()=>{
+  if(!lastXml) return;
+  download('vocal_score.musicxml', lastXml, 'application/vnd.recordare.musicxml+xml');
+});
+
+/* ===== Engraving + PDF (same as before) ===== */
+const { jsPDF } = window.jspdf;
+function toVexDuration(q){
+  const eps=1e-3;
+  const baseMap = [
+    {q:4, dur:'w'}, {q:2, dur:'h'}, {q:1, dur:'q'},
+    {q:0.5, dur:'8'}, {q:0.25, dur:'16'}, {q:0.125, dur:'32'}
+  ];
+  for(const m of baseMap){ if(Math.abs(q - m.q) < eps) return {dur:m.dur, dots:0}; }
+  for(const m of baseMap){ if(Math.abs(q - m.q*1.5) < eps) return {dur:m.dur, dots:1}; }
+  let nearest = baseMap.reduce((best,m)=> (Math.abs(q-m.q)<Math.abs(q-best.q)?m:best), baseMap[2]);
+  return {dur:nearest.dur, dots:0};
+}
+function midiToVexKey(m){
+  const steps=['c','c#','d','d#','e','f','f#','g','g#','a','a#','b'];
+  const step = steps[m%12];
+  const octave = Math.floor(m/12)-1;
+  return step + '/' + octave;
+}
+function quarterDurationsFromNotes(notes, plan){
+  const qps = plan.tempoBpm / 60;
+  const qNotes = notes.map(n=>({ midi:n.midi, qlen: Math.max(1/plan.gridDen, Math.round((n.durSec*qps)*plan.gridDen)/plan.gridDen) }));
+  const [n,d]=plan.meter.split('/').map(Number);
+  return { qNotes, measureQL: n*(4/d) };
+}
+function splitIntoMeasures(qNotes, measureQL){
+  const measures=[]; let cur=[]; let sum=0;
+  for(const n of qNotes){
+    let rem = n.qlen; let first=true;
+    while(rem > 1e-6){
+      const space = measureQL - sum;
+      const take = Math.min(rem, space);
+      cur.push({midi:n.midi, qlen:take, tieStart:!first, tieStop: rem - take > 1e-6});
+      sum += take; rem -= take; first=false;
+      if(Math.abs(sum - measureQL) < 1e-6){ measures.push(cur); cur=[]; sum=0; }
+    }
+  }
+  if(cur.length) measures.push(cur);
+  return measures;
+}
+function renderVexFlow(notes, plan){
+  vfPreview.innerHTML='';
+  if(!notes.length) return;
+  const VF = Vex.Flow;
+  const width = 900, heightPerSystem = 120;
+  const staveWidth = width - 40;
+
+  const { qNotes, measureQL } = quarterDurationsFromNotes(notes, plan);
+  const measures = splitIntoMeasures(qNotes, measureQL);
+
+  for(let i=0; i<measures.length; i+=4){
+    const sysMeasures = measures.slice(i, i+4);
+    const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+    svg.setAttribute('width', width); svg.setAttribute('height', heightPerSystem);
+    vfPreview.appendChild(svg);
+    const renderer = new VF.Renderer(svg, VF.Renderer.Backends.SVG);
+    const context = renderer.getContext();
+
+    let x=10; const y=30;
+    const [beats, beatType] = plan.meter.split('/').map(Number);
+
+    sysMeasures.forEach((mset, idx)=>{
+      const stave = new VF.Stave(x, y, staveWidth / sysMeasures.length);
+      if(idx===0){
+        stave.addClef('treble');
+        stave.addTimeSignature(`${beats}/${beatType}`);
+        const ks = (plan.keySignature||'C major').split(' ')[0];
+        const keySigMap = ['C','G','D','A','E','B','F#','C#','F','Bb','Eb','Ab','Db','Gb','Cb'];
+        if(keySigMap.includes(ks)){ stave.addKeySignature(ks); }
+        const tempoText = new VF.StaveTempo({name: `${plan.tempoBpm} BPM`, duration: 'q'}, -1);
+        stave.setTempo(tempoText, 0);
+      }
+      stave.setContext(context).draw();
+
+      const vfNotes = mset.map(n=>{
+        const spec = toVexDuration(n.qlen);
+        const vf = new VF.StaveNote({ keys:[midiToVexKey(n.midi)], duration: spec.dur });
+        for(let d=0; d<spec.dots; d++) VF.Dot.buildAndAttach([vf], { all: true });
+        if(midiToVexKey(n.midi).includes('#')) vf.addAccidental(0, new VF.Accidental('#'));
+        return {vf, tieStart:n.tieStart, tieStop:n.tieStop};
+      });
+
+      const voice = new VF.Voice({num_beats: beats,  beat_value: beatType}).setStrict(false);
+      voice.addTickables(vfNotes.map(x=>x.vf));
+      new VF.Formatter().joinVoices([voice]).format([voice], stave.getWidth()-20);
+      voice.draw(context, stave);
+
+      for(let k=0; k<vfNotes.length; k++){
+        const curr = vfNotes[k];
+        if(curr.tieStart && k>0){
+          const prev = vfNotes[k-1];
+          new VF.StaveTie({ first_note: prev.vf, last_note: curr.vf }).setContext(context).draw();
+        }
+      }
+      x += stave.getWidth();
+    });
+  }
+}
+engraveBtn.addEventListener('click', ()=>{
+  if(!lastNotes.length){ alert('Run Analyze first.'); return; }
+  renderVexFlow(lastNotes, lastPlan);
+  dlPdf.disabled = false;
+});
+dlPdf.addEventListener('click', async ()=>{
+  if(!vfPreview.firstElementChild){ alert('Click “Engrave (Preview)” first.'); return; }
+  const doc = new jsPDF({orientation:'portrait', unit:'pt', format:'letter'});
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const svgs = Array.from(vfPreview.querySelectorAll('svg'));
+  for(let i=0;i<svgs.length;i++){
+    if(i>0) doc.addPage();
+    const svg = svgs[i];
+    const scale = 0.95*Math.min((pageW)/svg.width.baseVal.value, (pageH)/svg.height.baseVal.value);
+    await svg2pdf(svg, doc, { x:20, y:30, scale: isFinite(scale)? scale : 1.0 });
+  }
+  doc.save('vocal_score.pdf');
+});
+
+/* ===== Optional GPT plan (unchanged) ===== */
+async function proposePlanWithGPT(rawNotes, userPrefs){
+  const key = document.getElementById('openaiKey').value.trim();
+  const model = document.getElementById('openaiModel').value;
+  if(!key) throw new Error('Add your OpenAI API key.');
+  const payload = {
+    model,
+    temperature: 0.2,
+    messages: [
+      {role:'system', content:'You are a meticulous music engraver. Return a compact JSON with meter, tempo_bpm, key_signature, quantization_denominator suitable for pop/R&B vocals.'},
+      {role:'user', content: JSON.stringify({events:rawNotes.slice(0,500), prefs:userPrefs})}
+    ],
+    response_format:{type:'json_object'}
+  };
+  const res = await fetch('https://api.openai.com/v1/chat/completions', {
+    method:'POST',
+    headers:{'Content-Type':'application/json','Authorization':`Bearer ${key}`},
+    body: JSON.stringify(payload)
+  });
+  if(!res.ok) throw new Error('OpenAI error '+res.status);
+  const data = await res.json();
+  const text = data.choices[0].message.content;
+  return JSON.parse(text);
+}
+const planOut = document.getElementById('planOut');
+planBtn.addEventListener('click', async ()=>{
+  if(!lastNotes.length){ alert('Run Analyze first.'); return; }
+  planOut.textContent = 'Requesting…';
+  try{
+    const prefs = { pop_bias:true, allow_triplets:true, prefer_barline_ties:true,
+      user_meter: meterSel.value, user_tempo: tempoBpm.value||'auto', user_key: forceKey.value||'auto' };
+    const plan = await proposePlanWithGPT(
+      lastNotes.map(n=>({pitch:n.midi, onset:n.startSec, dur:n.durSec})), prefs);
+    planOut.textContent = JSON.stringify(plan, null, 2);
+    const merged = {
+      meter: plan.meter || lastPlan.meter,
+      tempoBpm: plan.tempo_bpm || lastPlan.tempoBpm,
+      keySignature: plan.key_signature || lastPlan.keySignature,
+      gridDen: plan.quantization_denominator || lastPlan.gridDen
+    };
+    lastPlan = merged;
+    renderVexFlow(lastNotes, lastPlan);
+    dlPdf.disabled = false;
+  }catch(e){
+    planOut.textContent = 'Error: ' + (e.message||e);
+  }
+});
+</script>
+</body>
+</html>
